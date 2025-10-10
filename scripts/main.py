@@ -197,7 +197,7 @@ def list_playlist_items(youtube, playlist_id):
     return results
 
 
-def sync_playlist_items(youtube, playlist_id, target_video_ids):
+def sync_playlist_items(youtube, playlist_id, target_video_ids, dry_run: bool = False):
     """
     既存プレイリストの内容を target_video_ids に同期します。
     - 足りない動画は追加
@@ -211,24 +211,27 @@ def sync_playlist_items(youtube, playlist_id, target_video_ids):
     to_add = [v for v in target_video_ids if v not in current_video_ids]
     to_remove = [v for v in current_video_ids if v not in target_video_ids]
 
-    # 追加
-    for video_id in to_add:
-        playlist_item_body = {
-            'snippet': {
-                'playlistId': playlist_id,
-                'resourceId': {
-                    'kind': 'youtube#video',
-                    'videoId': video_id
+    if dry_run:
+        info(f"  [DRY-RUN] 追加予定: {len(to_add)}件, 削除予定: {len(to_remove)}件")
+    else:
+        # 追加
+        for video_id in to_add:
+            playlist_item_body = {
+                'snippet': {
+                    'playlistId': playlist_id,
+                    'resourceId': {
+                        'kind': 'youtube#video',
+                        'videoId': video_id
+                    }
                 }
             }
-        }
-        execute_with_retry(lambda: youtube.playlistItems().insert(part='snippet', body=playlist_item_body).execute())
+            execute_with_retry(lambda: youtube.playlistItems().insert(part='snippet', body=playlist_item_body).execute())
 
-    # 削除
-    for video_id in to_remove:
-        pid = id_to_item.get(video_id)
-        if pid:
-            execute_with_retry(lambda: youtube.playlistItems().delete(id=pid).execute())
+        # 削除
+        for video_id in to_remove:
+            pid = id_to_item.get(video_id)
+            if pid:
+                execute_with_retry(lambda: youtube.playlistItems().delete(id=pid).execute())
 
     return len(to_add), len(to_remove)
 
@@ -268,7 +271,7 @@ def fetch_recent_shorts(youtube, uploads_playlist_id: str, limit: int):
     return recent_shorts_ids
 
 
-def reorder_playlist_to_match(youtube, playlist_id: str, target_video_ids):
+def reorder_playlist_to_match(youtube, playlist_id: str, target_video_ids, dry_run: bool = False):
     """
     既存アイテムの position を target_video_ids の順序に合わせて並び替える。
     更新した件数を返す。
@@ -282,22 +285,25 @@ def reorder_playlist_to_match(youtube, playlist_id: str, target_video_ids):
         if vid in video_to_item:
             pid, cur_pos = video_to_item[vid]
             if cur_pos != idx:
-                body = {
-                    'id': pid,
-                    'snippet': {
-                        'playlistId': playlist_id,
-                        'position': idx,
-                    }
-                }
-                try:
-                    execute_with_retry(lambda: youtube.playlistItems().update(part='snippet', body=body).execute())
+                if dry_run:
                     updated += 1
-                except HttpError as e:
-                    warn(f"並び替えに失敗しました（videoId={vid} → pos={idx}）: {e}")
+                else:
+                    body = {
+                        'id': pid,
+                        'snippet': {
+                            'playlistId': playlist_id,
+                            'position': idx,
+                        }
+                    }
+                    try:
+                        execute_with_retry(lambda: youtube.playlistItems().update(part='snippet', body=body).execute())
+                        updated += 1
+                    except HttpError as e:
+                        warn(f"並び替えに失敗しました（videoId={vid} → pos={idx}）: {e}")
     return updated
 
 
-def create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update_mode=False, per_channel_limit: int = 10):
+def create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update_mode=False, per_channel_limit: int = 10, dry_run: bool = False):
     """
     指定された1つのチャンネルについて、直近のYouTube Shorts動画（61秒以下）を最大10件集め、
     新しい非公開再生リストを作成します。
@@ -330,19 +336,51 @@ def create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update
             existing = find_my_playlist_by_title(youtube, playlist_title)
             if existing:
                 pid = existing['id']
-                add_cnt, del_cnt = sync_playlist_items(youtube, pid, recent_shorts_ids)
+                add_cnt, del_cnt = sync_playlist_items(youtube, pid, recent_shorts_ids, dry_run=dry_run)
                 # 並び順を同期（最新順）
-                reord = reorder_playlist_to_match(youtube, pid, recent_shorts_ids)
-                info(f"- {channel_title}: 既存プレイリストを更新しました（追加 {add_cnt} / 削除 {del_cnt} / 並び替え {reord}）。")
+                reord = reorder_playlist_to_match(youtube, pid, recent_shorts_ids, dry_run=dry_run)
+                suffix = "（ドライラン）" if dry_run else ""
+                info(f"- {channel_title}: 既存プレイリストを更新{suffix}（追加 {add_cnt} / 削除 {del_cnt} / 並び替え {reord}）。")
             else:
-                info(f"- {channel_title}: 既存なし → 作成します（{len(recent_shorts_ids)}件）。")
+                if dry_run:
+                    info(f"- {channel_title}: 既存なし → [DRY-RUN] 作成予定（{len(recent_shorts_ids)}件）。")
+                else:
+                    info(f"- {channel_title}: 既存なし → 作成します（{len(recent_shorts_ids)}件）。")
+                    playlist_body = {
+                        'snippet': {
+                            'title': playlist_title,
+                            'description': f'{channel_title}の直近のShorts動画を集めた再生リストです。'
+                        },
+                        'status': {
+                            'privacyStatus': 'private'
+                        }
+                    }
+                    playlist = execute_with_retry(lambda: youtube.playlists().insert(part='snippet,status', body=playlist_body).execute())
+                    new_playlist_id = playlist['id']
+                    for video_id in recent_shorts_ids:
+                        playlist_item_body = {
+                            'snippet': {
+                                'playlistId': new_playlist_id,
+                                'resourceId': {
+                                    'kind': 'youtube#video',
+                                    'videoId': video_id
+                                }
+                            }
+                        }
+                        execute_with_retry(lambda: youtube.playlistItems().insert(part='snippet', body=playlist_item_body).execute())
+                    info(f"  -> 再生リスト '{playlist_title}' を作成しました。")
+        else:
+            if dry_run:
+                info(f"- {channel_title}: [DRY-RUN] {len(recent_shorts_ids)}件のShorts動画で再生リストを作成予定。")
+            else:
+                info(f"- {channel_title}: {len(recent_shorts_ids)}件のShorts動画で再生リストを作成します。")
                 playlist_body = {
                     'snippet': {
                         'title': playlist_title,
                         'description': f'{channel_title}の直近のShorts動画を集めた再生リストです。'
                     },
                     'status': {
-                        'privacyStatus': 'private'
+                        'privacyStatus': 'private' # 再生リストを非公開に設定
                     }
                 }
                 playlist = execute_with_retry(lambda: youtube.playlists().insert(part='snippet,status', body=playlist_body).execute())
@@ -359,31 +397,6 @@ def create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update
                     }
                     execute_with_retry(lambda: youtube.playlistItems().insert(part='snippet', body=playlist_item_body).execute())
                 info(f"  -> 再生リスト '{playlist_title}' を作成しました。")
-        else:
-            info(f"- {channel_title}: {len(recent_shorts_ids)}件のShorts動画で再生リストを作成します。")
-            playlist_body = {
-                'snippet': {
-                    'title': playlist_title,
-                    'description': f'{channel_title}の直近のShorts動画を集めた再生リストです。'
-                },
-                'status': {
-                    'privacyStatus': 'private' # 再生リストを非公開に設定
-                }
-            }
-            playlist = execute_with_retry(lambda: youtube.playlists().insert(part='snippet,status', body=playlist_body).execute())
-            new_playlist_id = playlist['id']
-            for video_id in recent_shorts_ids:
-                playlist_item_body = {
-                    'snippet': {
-                        'playlistId': new_playlist_id,
-                        'resourceId': {
-                            'kind': 'youtube#video',
-                            'videoId': video_id
-                        }
-                    }
-                }
-                execute_with_retry(lambda: youtube.playlistItems().insert(part='snippet', body=playlist_item_body).execute())
-            info(f"  -> 再生リスト '{playlist_title}' を作成しました。")
 
     except HttpError as e:
         warn(f"エラーが発生しました ({channel_title}): {e}")
@@ -394,6 +407,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='YouTube Shorts プレイリスト自動生成/更新スクリプト')
     parser.add_argument('--update', action='store_true', help='既存プレイリストがあれば更新（なければ作成）するモード')
     parser.add_argument('--limit', type=int, default=10, help='1チャンネルあたりのShorts上限（デフォルト: 10）')
+    parser.add_argument('--dry-run', action='store_true', help='書き込み操作を行わず、実行計画のみ表示する')
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument('--verbose', action='store_true', help='詳細ログを出力')
     verbosity.add_argument('--quiet', action='store_true', help='必要最低限の出力のみ')
@@ -415,5 +429,5 @@ if __name__ == '__main__':
         for sub in subscriptions:
             channel_id = sub['snippet']['resourceId']['channelId']
             channel_title = sub['snippet']['title']
-            create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update_mode=args.update, per_channel_limit=args.limit)
+            create_playlist_for_recent_shorts(youtube, channel_id, channel_title, update_mode=args.update, per_channel_limit=args.limit, dry_run=args.dry_run)
         info("\nすべての処理が完了しました。")

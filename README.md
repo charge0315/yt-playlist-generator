@@ -2,6 +2,10 @@
 
 自分が登録しているYouTubeチャンネルの最新ショート動画を自動で検出し、チャンネルごとに再生リストを自動生成するPythonスクリプトです。
 
+> お知らせ: Chrome拡張版は別リポジトリ「yt-buzz-ext」へ移行しました。
+> [https://github.com/charge0315/yt-buzz-ext](https://github.com/charge0315/yt-buzz-ext)
+> ブラウザからワンクリックで実行したい場合は拡張版をご利用ください。
+
 ## 主な機能
 
 - 登録している全チャンネルを自動で取得
@@ -84,6 +88,21 @@ bash ./setup.sh --run
 
 ```bash
 python scripts/main.py
+```
+
+### ドライラン（書き込みなしの計画確認）
+
+YouTube API の書き込み操作（プレイリスト作成・追加・削除・並べ替え）を行わず、実行計画のみを表示して確認できます。
+
+```bash
+# 読み取りのみで計画を表示（新規作成モード）
+python scripts/main.py --dry-run
+
+# 更新モード + ドライラン（既存プレイリストがある場合の差分計画を表示）
+python scripts/main.py --update --dry-run
+
+# 上限件数やログ出力を組み合わせ
+python scripts/main.py --update --limit 5 --dry-run --verbose
 ```
 
 初回実行時、ブラウザが自動的に開き、Googleアカウントでのログインと、YouTubeアカウントへのアクセス許可を求める画面が表示されます。画面の指示に従って認証を完了してください。
