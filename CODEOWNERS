@@ -1,0 +1,50 @@
+# CODEOWNERS
+# This file defines individuals or teams responsible for code in this repository.
+# More info: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo
+# Unless a later match takes precedence, @charg will be requested for review
+* @charg
+
+# Main Python script
+scripts/main.py @charg
+
+# Setup and configuration scripts
+setup.sh @charg
+setup.ps1 @charg
+
+# Documentation
+*.md @charg
+
+# Configuration files
+*.json @charg
+*.yml @charg
+*.yaml @charg
+.env.example @charg
+pyproject.toml @charg
+setup.cfg @charg
+
+# Python package files
+requirements*.txt @charg
+Pipfile @charg
+poetry.lock @charg
+setup.py @charg
+
+# GitHub Actions workflows
+/.github/workflows/ @charg
+
+# Testing
+tests/ @charg
+__tests__/ @charg
+*.test.py @charg
+conftest.py @charg
+
+# Docker configuration
+Dockerfile @charg
+docker-compose.yml @charg
+.dockerignore @charg
+
+# Credential/token files (ensure added to .gitignore)
+token*.json @charg
+credentials*.json @charg
+.credentials @charg
